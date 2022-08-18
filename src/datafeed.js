@@ -1,19 +1,25 @@
 const configurationData = {
     supported_resolutions: ['1D', '1W', '1M'],
-    exchanges: [
-        {
-            value: 'XNAS',
-            name: 'Nasdaq All Markets',
-            desc: 'Nasdaq Ngs Global Select Market',
-        }
-    ],
+    exchanges: [],
+    supports_marks: true,
+    supports_timescale_marks: true,
+    enabled_features: [
+        'create_volume_indicator_by_default'
+        ],
     symbols_types: [
         {
             name: 'crypto',
 
             // `symbolType` argument for the `searchSymbols` method, if a user selects this symbol type
             value: 'crypto',
-        }
+        },
+        {
+            name: 'custom',
+
+            // `symbolType` argument for the `searchSymbols` method, if a user selects this symbol type
+            value: 'custom',
+        },
+
     ]
 };
 
@@ -56,20 +62,9 @@ async function getAllSymbols() {
 
 async function makeApiRequest(path) {
     var data;
-    await timeout(500);
+    await timeout(50);
     data = await fetch(`https://sandbox.iexapis.com/stable/${path}`);
-    console.log('after promise');
     return data.json();
-    //try {
-    //    fetch(`https://cloud.iexapis.com/stable/${path}`)
-    //        .then(response => {
-    //            return response.json()
-    //        }).then((data) => {
-    //            return data;
-    //        });
-    //} catch (error) {
-    //    throw new Error(`IEX Cloud request error: ${error.status}`);
-    //}
 }
 
 function timeout(ms) {
@@ -98,11 +93,18 @@ function parseFullSymbol(fullSymbol) {
 export const Datafeed = {
     onReady: (callback) => {
         console.log('[onReady]: Method call');
-        setTimeout(() => callback(configurationData));
+
+        makeApiRequest(`/ref-data/exchanges?token=Tpk_8d61db719bdf42e78dc4383ba340b011`)
+            .then(exchanges => {
+                configurationData.exchanges = exchanges.map((exchange) => ({
+                    value: exchange.exchange,
+                    name: exchange.exchange,
+                    desc: exchange.description
+                }));
+            }).then(() => setTimeout(() => callback(configurationData)));
     },
 
     searchSymbols: (userInput, exchange, symbolType, onResultReadyCallback) => {
-        debugger;
         console.log('[searchSymbols]: Method call');
         const symbols = getAllSymbols().then((symbols) => {
             const newSymbols = symbols.filter(symbol => {
@@ -138,7 +140,7 @@ export const Datafeed = {
                     minmov: 1,
                     pricescale: 100,
                     has_intraday: false,
-                    has_no_volume: true,
+                    has_no_volume: false,
                     has_weekly_and_monthly: false,
                     supported_resolutions: configurationData.supported_resolutions,
                     volume_precision: 2,
@@ -154,11 +156,13 @@ export const Datafeed = {
     getBars: (symbolInfo, resolution, periodParams, onHistoryCallback, onErrorCallback) => {
         console.log('[getBars]: Method call', symbolInfo);
         const { from, to, firstDataRequest } = periodParams;
-        
+
         console.log('[getBars]: Method call', symbolInfo, resolution, from, to, firstDataRequest);
+        var currectTime = new Date().getTime();
+        var needToLoadCurrentPrice = currectTime >= from * 1000 && currectTime < to * 1000;
 
         try {
-            
+
             makeApiRequest(`stock/${symbolInfo.name}/chart/max/?token=Tpk_8d61db719bdf42e78dc4383ba340b011`)
                 .then((data) => {
                     if (data.Response && data.Response === 'Error' || data.length === 0) {
@@ -175,9 +179,11 @@ export const Datafeed = {
                                 high: bar.high,
                                 open: bar.open,
                                 close: bar.close,
+                                volume: bar.volume
                             }];
                         }
                     });
+
                     console.log(`[getBars]: returned ${bars.length} bar(s)`);
                     console.log(bars);
                     onHistoryCallback(bars, { noData: false });
@@ -186,6 +192,63 @@ export const Datafeed = {
             console.log('[getBars]: Get error', error);
             onErrorCallback(error);
         }
+    },
+    getMarks: (symbolInfo, from, to, onDataCallback, resolution) => {
+        var currectTime = new Date().getTime();
+        var needToLoadCurrentPrice = currectTime >= from * 1000 && currectTime < to * 1000;
+        if (needToLoadCurrentPrice) {
+            console.log('[getMarks]: Method call', symbolInfo);
+            makeApiRequest(`/time-series/advanced_dividends/${symbolInfo.name}?token=Tpk_8d61db719bdf42e78dc4383ba340b011`)
+                .then((data) => {
+                    var marks = [];
+                    data.map(dataItem => {
+                        marks.push({
+                            id: dataItem.id,
+                            time: new Date(dataItem.date).getTime(),
+                            color: 'FF00FF',
+                            text: dataItem.description,
+                            label: 'D',
+                            labelFontColor: '00FF00',
+                            minSize: 10
+                        })
+                    })
+
+                    onDataCallback(marks);
+                })
+                .catch((error) => {
+                    console.log(`UdfCompatibleDatafeed: Request marks failed: ${error}`);
+                    onDataCallback([]);
+                });
+        }
+    },
+    getTimescaleMarks: (symbolInfo, from, to, onDataCallback, resolution) => {
+
+        var currectTime = new Date().getTime();
+        var needToLoadCurrentPrice = currectTime >= from * 1000 && currectTime < to * 1000;
+        if (needToLoadCurrentPrice) {
+            console.log('[getTimescaleMarks]: Method call', symbolInfo, from, to, onDataCallback, resolution);
+            makeApiRequest(`/stock/${symbolInfo.name}/dividends?token=Tpk_8d61db719bdf42e78dc4383ba340b011`)
+                .then((data) => {
+                    var marks = [];
+                    data.map(dataItem => {
+                        marks.push({
+                            id: dataItem.id,
+                            time: new Date(dataItem.date).getTime(),
+                            color: 'FF00FF',
+                            text: dataItem.description,
+                            label: 'D',
+                            tooltip: dataItem.description
+                        })
+                    })
+
+                    onDataCallback(marks);
+                })
+                .catch((error) => {
+                    console.log(`UdfCompatibleDatafeed: Request marks failed: ${error}`);
+                    onDataCallback([]);
+                });
+        }
+       
     },
     subscribeBars: (symbolInfo, resolution, onRealtimeCallback, subscribeUID, onResetCacheNeededCallback) => {
         console.log('[subscribeBars]: Method call with subscribeUID:', subscribeUID);
